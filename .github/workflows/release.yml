@@ -48,17 +48,30 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
           # Add arm64 architecture
           sudo dpkg --add-architecture arm64
-          # Create ARM64 sources pointing to ports.ubuntu.com
+          # Create ARM64-only sources from ports.ubuntu.com
           sudo tee /etc/apt/sources.list.d/arm64-ports.list > /dev/null <<'EOF'
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-updates main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-security main restricted universe multiverse
           EOF
-          # Pin existing sources to amd64 only (both .list and .sources formats)
-          sudo find /etc/apt/sources.list.d/ -name '*.list' ! -name 'arm64-ports.list' -exec sed -i 's/^deb /deb [arch=amd64] /g; s/^deb-src /deb-src [arch=amd64] /g' {} \;
-          sudo find /etc/apt/sources.list.d/ -name '*.sources' -exec sed -i 's/^Architectures: amd64$/Architectures: amd64/g; /^Architectures:/!b; s/$/ amd64/; T; s/amd64 amd64/amd64/g' {} \;
-          # Also handle deb822 format: restrict Architectures field
-          sudo find /etc/apt/sources.list.d/ -name '*.sources' -exec sed -i '/^Architectures:/c\Architectures: amd64' {} \;
+          # Replace sources.list with amd64-only entries (avoids arm64 fetch from archive.ubuntu.com)
+          sudo tee /etc/apt/sources.list > /dev/null <<'EOF'
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy-backports main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
+          EOF
+          # Keep third-party .list files (like microsoft-prod) untouched
+          # but restrict their arch to amd64 using apt preferences
+          sudo tee /etc/apt/preferences.d/arch-pinning > /dev/null <<'EOF'
+          Package: *
+          Pin: release a=jammy
+          Pin-Priority: 500
+
+          Package: *
+          Pin: origin ports.ubuntu.com
+          Pin-Priority: 500
+          EOF
           sudo apt-get update
           sudo apt-get install -y \
             libxdo-dev:arm64 \
