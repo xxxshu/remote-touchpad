@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+<title>Remote Touchpad</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="sent">已发送</div>
+<div id="app">
+  <div id="status" class="err">⏳ 连接中...</div>
+  <div id="touchpad">
+    <div class="hint">触控板<br><small>单指移动=光标 · 单击=点击 · 双击=双击<br>双指上下滑=滚动</small></div>
+    <div id="scroll-tag">⬆⬆ 滚动</div>
+  </div>
+</div>
+
+<!-- 功能键切换按钮 -->
+<button id="fk-btn" onclick="toggleDrawer()">≡</button>
+
+<!-- 键盘切换按钮 -->
+<button id="kb-btn" onclick="toggleKb()">⌨️</button>
+<textarea id="txt" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+
+<!-- 审批弹窗 -->
+<div id="approval-overlay">
+  <div id="approval-modal">
+    <h3>🔗 新设备请求连接</h3>
+    <p id="approval-info">有新设备正在尝试接管控制权</p>
+    <div class="approval-btns">
+      <button id="btn-reject" onclick="approvalResp('reject')">拒绝</button>
+      <button id="btn-accept" onclick="approvalResp('accept')">确认退出</button>
+    </div>
+  </div>
+</div>
+
+<!-- 功能键侧边抽屉 -->
+<div id="fk-overlay" onclick="toggleDrawer()"></div>
+<div id="fk-drawer">
+  <div class="fk-title">功能键</div>
+
+  <div class="fk-section">
+    <div class="fk-label">单键</div>
+    <div class="fk-grid">
+      <button class="fk-btn" data-key="Escape">ESC</button>
+      <button class="fk-btn" data-key="Tab">Tab</button>
+    </div>
+    <div class="fk-grid arrow-grid">
+      <button class="fk-btn arrow" data-key="Up">↑</button>
+      <button class="fk-btn arrow" data-key="Left">←</button>
+      <button class="fk-btn arrow" data-key="Down">↓</button>
+      <button class="fk-btn arrow" data-key="Right">→</button>
+    </div>
+  </div>
+
+  <div class="fk-section">
+    <div class="fk-label">修饰键（点击锁定）</div>
+    <div class="fk-grid">
+      <button class="fk-btn modifier" data-mod="ctrl">Ctrl</button>
+      <button class="fk-btn modifier" data-mod="shift">Shift</button>
+      <button class="fk-btn modifier" data-mod="alt">Alt</button>
+    </div>
+  </div>
+
+  <div class="fk-section">
+    <div class="fk-label">组合键</div>
+    <div class="fk-grid combo-grid">
+      <button class="fk-btn combo" data-key="ctrl+c">Ctrl+C</button>
+      <button class="fk-btn combo" data-key="ctrl+v">Ctrl+V</button>
+      <button class="fk-btn combo" data-key="ctrl+x">Ctrl+X</button>
+      <button class="fk-btn combo" data-key="ctrl+z">Ctrl+Z</button>
+      <button class="fk-btn combo" data-key="ctrl+a">Ctrl+A</button>
+      <button class="fk-btn combo" data-key="ctrl+s">Ctrl+S</button>
+      <button class="fk-btn combo" data-key="ctrl+slash">Ctrl+/</button>
+      <button class="fk-btn combo" data-key="shift+Tab">Shift+Tab</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

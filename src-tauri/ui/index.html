@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Remote Touchpad</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2e;color:#eee;font-family:-apple-system,system-ui,sans-serif;
+  display:flex;flex-direction:column;align-items:center;padding:20px;gap:16px;
+  min-height:100vh;-webkit-app-region:drag}
+h1{font-size:20px;color:#4ecca3;-webkit-app-region:drag}
+
+.panel{background:#16213e;border-radius:12px;padding:16px;width:100%;max-width:360px;
+  -webkit-app-region:no-drag}
+
+/* 端口配置 */
+.port-row{display:flex;align-items:center;gap:10px}
+.port-row label{font-size:14px;color:#aaa}
+.port-row input{width:80px;padding:6px 10px;border:1px solid #333;border-radius:6px;
+  background:#0f3460;color:#eee;font-size:14px;text-align:center}
+.port-row input:disabled{opacity:.5}
+#toggle-btn{flex:1;padding:10px;border:none;border-radius:8px;font-size:14px;
+  font-weight:600;cursor:pointer;background:#533483;color:#eee;transition:all .15s}
+#toggle-btn:active{transform:scale(.97)}
+#toggle-btn.running{background:#e23e57}
+
+/* 连接信息 */
+#info{text-align:center;font-size:13px;color:#4ecca3;min-height:20px;
+  cursor:pointer;margin-top:8px;word-break:break-all}
+#info:hover{text-decoration:underline}
+#hint{text-align:center;font-size:11px;color:#666;min-height:16px}
+
+/* 二维码 */
+#qr-box{display:flex;justify-content:center;min-height:160px;align-items:center}
+#qr-box svg{max-width:160px;max-height:160px}
+#qr-box img{max-width:160px;max-height:160px}
+#qr-placeholder{color:#444;font-size:12px}
+
+/* 设备列表 */
+.device-title{font-size:14px;font-weight:600;margin-bottom:8px;color:#aaa}
+#devices{background:#0f3460;border-radius:8px;padding:8px;min-height:80px;
+  max-height:160px;overflow-y:auto;font-family:Consolas,monospace;font-size:12px;
+  line-height:1.6;white-space:pre-wrap;word-break:break-all}
+#devices:empty::before{content:'暂无设备连接';color:#444}
+
+/* 通知 */
+.copied{position:fixed;top:10px;left:50%;transform:translateX(-50%);
+  background:#4ecca3;color:#1a1a2e;padding:4px 16px;border-radius:6px;
+  font-size:12px;font-weight:600;opacity:0;transition:opacity .2s;pointer-events:none}
+.copied.show{opacity:1}
+</style>
+</head>
+<body>
+<h1>🖱️ Remote Touchpad</h1>
+
+<div class="panel">
+  <div class="port-row">
+    <label>端口:</label>
+    <input id="port-input" type="number" value="8765" min="1" max="65535">
+    <button id="toggle-btn" onclick="toggleServer()">▶ 启动服务器</button>
+  </div>
+  <div id="info"></div>
+  <div id="hint"></div>
+</div>
+
+<div class="panel">
+  <div id="qr-box"><span id="qr-placeholder">启动服务器后显示二维码</span></div>
+</div>
+
+<div class="panel">
+  <div class="device-title">已连接设备</div>
+  <div id="devices"></div>
+</div>
+
+<div class="copied" id="copied-toast">已复制到剪贴板</div>
+
+<script>
+const { invoke } = window.__TAURI__.core;
+
+const portInput = document.getElementById('port-input');
+const toggleBtn = document.getElementById('toggle-btn');
+const infoEl = document.getElementById('info');
+const hintEl = document.getElementById('hint');
+const qrBox = document.getElementById('qr-box');
+const devicesEl = document.getElementById('devices');
+const copiedToast = document.getElementById('copied-toast');
+
+let running = false;
+let pollTimer = null;
+
+async function toggleServer() {
+  if (!running) {
+    const port = parseInt(portInput.value);
+    if (port < 1 || port > 65535) { infoEl.textContent = '❌ 端口无效'; return; }
+    try {
+      const status = await invoke('start_server_cmd', { port });
+      onStarted(status);
+    } catch (e) {
+      infoEl.textContent = '❌ ' + e;
+    }
+  } else {
+    try {
+      await invoke('stop_server_cmd');
+      onStopped();
+    } catch (e) {
+      infoEl.textContent = '❌ ' + e;
+    }
+  }
+}
+
+function onStarted(status) {
+  running = true;
+  toggleBtn.textContent = '⏹ 停止服务器';
+  toggleBtn.classList.add('running');
+  portInput.disabled = true;
+  infoEl.textContent = '📱 ' + status.url;
+  hintEl.textContent = '手机扫描下方二维码或输入地址连接';
+  qrBox.innerHTML = status.qr_svg;
+  pollTimer = setInterval(pollStatus, 2000);
+}
+
+function onStopped() {
+  running = false;
+  toggleBtn.textContent = '▶ 启动服务器';
+  toggleBtn.classList.remove('running');
+  portInput.disabled = false;
+  infoEl.textContent = '服务器已停止';
+  hintEl.textContent = '';
+  qrBox.innerHTML = '<span id="qr-placeholder">启动服务器后显示二维码</span>';
+  devicesEl.textContent = '';
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+async function pollStatus() {
+  try {
+    const status = await invoke('get_status');
+    if (!status.running) { onStopped(); return; }
+    // Update devices from events
+    if (status.events && status.events.length > 0) {
+      status.events.forEach(e => {
+        devicesEl.textContent += e + '\n';
+        devicesEl.scrollTop = devicesEl.scrollHeight;
+      });
+    }
+  } catch (e) {
+    // Server might have stopped
+  }
+}
+
+// Click URL to copy
+infoEl.addEventListener('click', () => {
+  const text = infoEl.textContent.replace('📱 ', '');
+  if (text && text.includes('http')) {
+    navigator.clipboard.writeText(text);
+    copiedToast.classList.add('show');
+    setTimeout(() => copiedToast.classList.remove('show'), 1000);
+  }
+});
+
+// Auto-start on load
+invoke('get_status').then(status => {
+  if (status.running) onStarted(status);
+}).catch(() => {});
+</script>
+</body>
+</html>

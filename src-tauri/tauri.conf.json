@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
+  "productName": "Remote Touchpad",
+  "version": "0.1.0",
+  "identifier": "com.remote-touchpad.app",
+  "build": {
+    "frontendDist": "./ui",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Remote Touchpad",
+        "width": 400,
+        "height": 550,
+        "resizable": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "icon": ["icons/icon.png"]
+  }
+}
