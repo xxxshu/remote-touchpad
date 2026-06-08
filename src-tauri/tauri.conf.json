@@ -24,7 +24,6 @@
   "bundle": {
     "icon": ["icons/icon.ico", "icons/icon.png"],
     "targets": ["nsis", "deb"],
-    "active": true,
-    "resources": ["../frontend/*", "../frontend/iconfont/*"]
+    "active": true
   }
 }

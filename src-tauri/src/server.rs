@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,6 +19,23 @@ use tracing::{info, warn};
 
 use crate::input::InputSimulator;
 use crate::protocol::{ClientMsg, ServerMsg};
+
+/// Frontend files embedded in the binary at compile time
+#[derive(Clone)]
+struct EmbeddedFile {
+    content: &'static [u8],
+    mime: &'static str,
+}
+
+fn embedded_frontend() -> HashMap<&'static str, EmbeddedFile> {
+    let mut m: HashMap<&'static str, EmbeddedFile> = HashMap::new();
+    m.insert("", EmbeddedFile { content: include_bytes!("../../frontend/index.html"), mime: "text/html; charset=utf-8" });
+    m.insert("index.html", EmbeddedFile { content: include_bytes!("../../frontend/index.html"), mime: "text/html; charset=utf-8" });
+    m.insert("style.css", EmbeddedFile { content: include_bytes!("../../frontend/style.css"), mime: "text/css; charset=utf-8" });
+    m.insert("app.js", EmbeddedFile { content: include_bytes!("../../frontend/app.js"), mime: "application/javascript; charset=utf-8" });
+    m.insert("iconfont/iconfont.js", EmbeddedFile { content: include_bytes!("../../frontend/iconfont/iconfont.js"), mime: "application/javascript; charset=utf-8" });
+    m
+}
 
 /// Shared server state
 pub struct ServerState {
@@ -119,17 +137,27 @@ pub async fn start_server(
     mut stop_rx: broadcast::Receiver<()>,
 ) -> Result<()> {
     let frontend = state.frontend_dir.clone();
+    let embedded = embedded_frontend();
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .fallback(move |req: axum::http::Request<axum::body::Body>| {
             let frontend = frontend.clone();
+            let embedded = embedded.clone();
             async move {
                 let path = req.uri().path().trim_start_matches('/');
                 let path = if path.is_empty() { "index.html" } else { path };
-                let file_path = frontend.join(path);
 
-                // Path traversal protection: ensure resolved path is under frontend_dir
+                // Try embedded files first (works in packaged app)
+                if let Some(file) = embedded.get(path) {
+                    return axum::response::Response::builder()
+                        .header("content-type", file.mime)
+                        .body(axum::body::Body::from(file.content))
+                        .unwrap();
+                }
+
+                // Fallback to filesystem (dev mode)
+                let file_path = frontend.join(path);
                 let file_path = match file_path.canonicalize() {
                     Ok(p) => p,
                     Err(_) => {
@@ -155,9 +183,6 @@ pub async fn start_server(
                             Some("png") => "image/png",
                             Some("svg") => "image/svg+xml",
                             Some("json") => "application/json",
-                            Some("ttf") => "font/ttf",
-                            Some("woff") => "font/woff",
-                            Some("woff2") => "font/woff2",
                             _ => "application/octet-stream",
                         };
                         axum::response::Response::builder()
