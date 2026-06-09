@@ -91,32 +91,63 @@ impl ServerState {
     }
 }
 
-/// Get LAN IP address (prefer WiFi/Ethernet over virtual adapters)
+/// Get LAN IP address (prefer WiFi/Ethernet over virtual adapters).
+///
+/// Uses a UDP "connect" trick first (fast, never blocks), then falls back to
+/// `local_ip_address` with a 2-second timeout to avoid hanging on systems
+/// where `getifaddrs()` stalls (e.g. some ARM64 / Android / container envs).
 pub fn get_local_ip() -> String {
-    if let Ok(addrs) = local_ip_address::list_afinet_netifas() {
-        let mut best = None;
-        for (_name, ip) in &addrs {
-            if let std::net::IpAddr::V4(v4) = ip {
-                let s = v4.to_string();
-                if s.starts_with("127.") || s.starts_with("169.254.") {
-                    continue;
-                }
-                if s.starts_with("192.168.") || s.starts_with("10.") {
-                    return s;
-                }
-                if best.is_none() {
-                    best = Some(s);
-                }
-            }
-        }
-        if let Some(ip) = best {
+    // Fast path: UDP connect to a public IP — doesn't send any traffic,
+    // just lets the OS pick the source address for the route.
+    if let Some(ip) = udp_local_ip() {
+        if !ip.starts_with("127.") {
             return ip;
         }
     }
-    if let Ok(ip) = local_ip_address::local_ip() {
-        return ip.to_string();
+
+    // Slow path with timeout: enumerate interfaces via local_ip_address crate.
+    // Some systems (ARM64 / Android / containers) can hang in getifaddrs(),
+    // so we cap the whole scan at 2 seconds using a helper thread + channel.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _ = std::thread::Builder::new()
+        .name("local-ip-scan".into())
+        .spawn(move || {
+            let result = (|| -> Option<String> {
+                let addrs = local_ip_address::list_afinet_netifas().ok()?;
+                let mut best = None;
+                for (_name, ip) in &addrs {
+                    if let std::net::IpAddr::V4(v4) = ip {
+                        let s = v4.to_string();
+                        if s.starts_with("127.") || s.starts_with("169.254.") {
+                            continue;
+                        }
+                        if s.starts_with("192.168.") || s.starts_with("10.") {
+                            return Some(s);
+                        }
+                        if best.is_none() {
+                            best = Some(s);
+                        }
+                    }
+                }
+                best
+            })();
+            let _ = tx.send(result);
+        });
+
+    if let Ok(Some(ip)) = rx.recv_timeout(std::time::Duration::from_secs(2)) {
+        return ip;
     }
+
+    // Last resort
     "127.0.0.1".to_string()
+}
+
+/// Fast local IP detection via UDP socket connect (no traffic sent).
+fn udp_local_ip() -> Option<String> {
+    use std::net::UdpSocket;
+    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    sock.local_addr().ok().map(|a| a.ip().to_string())
 }
 
 /// Generate QR code as SVG
