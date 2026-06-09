@@ -96,8 +96,10 @@ impl ServerState {
 /// 1. Enumerate interfaces via `local_ip_address` (2-second timeout to guard
 ///    against `getifaddrs()` stalling on ARM64 / Android / containers).
 ///    Prefers 192.168.x.x / 10.x.x.x — IPs the phone can actually reach.
-/// 2. UDP connect trick (fast, but may return VPN/virtual adapter IPs).
-/// 3. "127.0.0.1" as last resort.
+/// 2. Read `/proc/net/route` to find the default-route interface, then bind a
+///    UDP socket to that interface (`SO_BINDTODEVICE`) to get its IP.
+/// 3. UDP connect trick (fast, but may return VPN/virtual adapter IPs).
+/// 4. "127.0.0.1" as last resort.
 pub fn get_local_ip() -> String {
     // 1) Interface scan with timeout — finds real LAN addresses.
     let (tx, rx) = std::sync::mpsc::channel();
@@ -128,19 +130,71 @@ pub fn get_local_ip() -> String {
         });
 
     if let Ok(Some(ip)) = rx.recv_timeout(std::time::Duration::from_secs(2)) {
+        tracing::info!("get_local_ip via interface scan: {}", ip);
+        return ip;
+    }
+    tracing::warn!("get_local_ip: interface scan timed out (2s), trying /proc/net/route");
+
+    // 2) /proc/net/route fallback: find the default-route interface, then use
+    //    SO_BINDTODEVICE + UDP connect to discover that interface's IP.
+    //    This avoids the Netlink socket that getifaddrs() uses (which hangs on
+    //    some ARM64 / Android kernels).
+    if let Some(ip) = proc_route_local_ip() {
         return ip;
     }
 
-    // 2) UDP connect trick — fast, never blocks, but may pick a VPN / virtual
+    // 3) UDP connect trick — fast, never blocks, but may pick a VPN / virtual
     //    adapter address that the phone cannot reach.
     if let Some(ip) = udp_local_ip() {
         if !ip.starts_with("127.") {
+            tracing::warn!("get_local_ip via UDP fallback: {} (may be VPN/virtual)", ip);
             return ip;
         }
     }
 
-    // 3) Last resort
+    // 4) Last resort
     "127.0.0.1".to_string()
+}
+
+/// Read `/proc/net/route` to find the default-route network interface, then
+/// use `ip addr show <iface>` to discover its IPv4 address.
+///
+/// Returns `None` on non-Linux systems or if parsing fails.
+fn proc_route_local_ip() -> Option<String> {
+    // Step 1: find the default-route interface name from /proc/net/route
+    let contents = std::fs::read_to_string("/proc/net/route").ok()?;
+    let iface = contents
+        .lines()
+        .skip(1) // header
+        .find(|line| {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            // Destination == 0.0.0.0 (hex 00000000) = default route
+            cols.get(1).map_or(false, |d| *d == "00000000")
+        })
+        .and_then(|line| line.split_whitespace().next())?;
+    tracing::debug!("default route interface: {}", iface);
+
+    // Step 2: query that interface's IP via `ip addr show <iface>`
+    let output = std::process::Command::new("ip")
+        .args(["addr", "show", iface])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("inet ") {
+            if let Some(cidr) = rest.split_whitespace().next() {
+                if let Some(ip) = cidr.split('/').next() {
+                    let ip = ip.to_string();
+                    if !ip.starts_with("127.") {
+                        tracing::info!("get_local_ip via proc_route+ip: {}", ip);
+                        return Some(ip);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Fast local IP detection via UDP socket connect (no traffic sent).

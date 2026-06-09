@@ -202,6 +202,7 @@ pub fn run() {
 
 /// CLI mode: start server without Tauri GUI
 pub fn run_cli() {
+    tracing_subscriber::fmt::init();
     let port: u16 = std::env::args()
         .collect::<Vec<_>>()
         .windows(2)
