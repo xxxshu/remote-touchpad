@@ -109,8 +109,8 @@ function connect() {
     } else if (d.a === 'approval_req') {
       $('approval-info').textContent = d.ip + ' 正在尝试接管';
       $('approval-overlay').classList.add('show');
-    } else if (d.a === 'ime_init') {
-      // Server pushes IME status (on connect or after toggle)
+    } else if (d.a === 'ime_init' || d.a === 'ime_state') {
+      // Server pushes IME status (on connect via ime_init, after toggle/refresh via ime_state)
       const newStatus = (d.status || 'EN').toLowerCase();
       imeStatus = newStatus;
       oskLang = newStatus;
