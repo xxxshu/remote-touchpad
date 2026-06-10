@@ -28,6 +28,12 @@ pub enum ClientMsg {
     Backspace { #[serde(default = "default_one")] n: u32 },
     #[serde(rename = "ime")]
     ToggleIME { #[serde(default)] mode: String },
+    /// Request physical IME toggle (simulates platform key, no mode needed)
+    #[serde(rename = "ime_toggle")]
+    PressImeToggle,
+    /// Request server to re-read and push current IME state
+    #[serde(rename = "ime_refresh")]
+    RefreshIme,
     #[serde(rename = "approval_resp")]
     ApprovalResp { r: String },
     #[serde(rename = "auth")]
@@ -51,4 +57,7 @@ pub enum ServerMsg {
     AuthRequired,
     #[serde(rename = "auth_fail")]
     AuthFail,
+    /// Push current IME status to client (sent on connect and after toggle)
+    #[serde(rename = "ime_init")]
+    ImeInit { status: String },
 }

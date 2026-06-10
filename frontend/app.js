@@ -1,6 +1,7 @@
 // ─── Connection ──────────────────────────────────────
 const $ = id => document.getElementById(id);
 let ws, reconn, hasControl = false, hasEverControlled = false, isProot = false;
+let imeStatus = 'en'; // Server-pushed IME state: 'en' or 'zh'
 const st = $('status');
 
 // ─── Haptic feedback ────────────────────────────────
@@ -108,6 +109,13 @@ function connect() {
     } else if (d.a === 'approval_req') {
       $('approval-info').textContent = d.ip + ' 正在尝试接管';
       $('approval-overlay').classList.add('show');
+    } else if (d.a === 'ime_init') {
+      // Server pushes IME status (on connect or after toggle)
+      const newStatus = (d.status || 'EN').toLowerCase();
+      imeStatus = newStatus;
+      oskLang = newStatus;
+      const btn = osk.querySelector('.osk-key[data-action="lang"]');
+      if (btn) btn.textContent = oskLang === 'en' ? '中/EN' : 'EN/中';
     }
   };
 }
@@ -365,16 +373,37 @@ osk.addEventListener('pointerdown', e => {
         bsRepeatId = setInterval(() => handleOskAction('backspace'), 80);
       }, 400);
     }
+    // Long-press detection for lang key (passive override)
+    if (btn.dataset.action === 'lang') {
+      langLongPressed = false;
+      clearTimeout(langPressTimer);
+      langPressTimer = setTimeout(() => {
+        langLongPressed = true;
+        // Long press: flip local UI only, no server message (passive override)
+        oskLang = oskLang === 'en' ? 'zh' : 'en';
+        const b = osk.querySelector('.osk-key[data-action="lang"]');
+        if (b) b.textContent = oskLang === 'en' ? '中/EN' : 'EN/中';
+        if (isProot) { pyBuf = ''; pyCandidates = []; pinyinBar.classList.add('hidden'); }
+        hapticDragStart();
+      }, 500);
+    }
   }
   else if (btn.dataset.k) handleOskKey(btn.dataset.k);
 }, { passive: false });
 
 let bsRepeatTimer, bsRepeatId;
+let langPressTimer = null, langLongPressed = false;
 
 osk.addEventListener('pointerup', e => {
   const btn = e.target.closest('.osk-key');
   if (btn) btn.classList.remove('pressed');
   clearTimeout(bsRepeatTimer); clearInterval(bsRepeatId);
+  // If lang key was short-pressed (not long-pressed), handle it now
+  if (btn && btn.dataset.action === 'lang' && !langLongPressed) {
+    clearTimeout(langPressTimer);
+    handleLangShortPress();
+  }
+  clearTimeout(langPressTimer);
 });
 
 osk.addEventListener('pointerleave', e => {
@@ -436,17 +465,27 @@ function handleOskAction(action) {
       if (oskShift) { oskShift = false; updateShiftUI(); }
       flash(); break;
     case 'lang':
-      oskLang = oskLang === 'en' ? 'zh' : 'en';
-      const b = osk.querySelector('.osk-key[data-action="lang"]');
-      if (b) b.textContent = oskLang === 'en' ? '中/EN' : 'EN/中';
-      if (isProot) {
-        pyBuf = ''; pyCandidates = []; pinyinBar.classList.add('hidden');
-      } else {
-        S({ a: 'ime', mode: oskLang }); flash();
-      }
+      // Lang is now handled via long-press (passive override) in pointerdown/pointerup
+      // and short-press (ime_toggle) in handleLangShortPress
       break;
     case 'sym':
       oskSwitchLayer(oskLayer === 'alpha' ? 'sym' : 'alpha'); break;
+  }
+}
+
+/// Short press on lang key: request physical IME toggle from server.
+/// Server will push back the new state via ime_init.
+function handleLangShortPress() {
+  if (isProot) {
+    // In proot mode, toggle locally (no system IME available)
+    oskLang = oskLang === 'en' ? 'zh' : 'en';
+    const b = osk.querySelector('.osk-key[data-action="lang"]');
+    if (b) b.textContent = oskLang === 'en' ? '中/EN' : 'EN/中';
+    pyBuf = ''; pyCandidates = []; pinyinBar.classList.add('hidden');
+  } else {
+    // Non-proot: request server to simulate physical IME toggle key
+    S({ a: 'ime_toggle' }); flash();
+    // UI update will happen when server pushes back ime_init
   }
 }
 
@@ -758,6 +797,13 @@ document.querySelectorAll('.fk.combo').forEach(btn => {
 fkPanel.addEventListener('touchstart', e => e.stopPropagation(), { passive: true });
 fkPanel.addEventListener('touchmove', e => e.stopPropagation(), { passive: true });
 fkPanel.addEventListener('touchend', e => e.stopPropagation(), { passive: true });
+
+// ─── IME Refresh ──────────────────────────────────────
+function refreshIme() {
+  if (!hasControl) return;
+  S({ a: 'ime_refresh' });
+  hapticBtnPress();
+}
 
 // ─── Init ────────────────────────────────────────────
 connect();

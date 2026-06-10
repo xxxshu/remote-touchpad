@@ -18,6 +18,7 @@ use anyhow::Result;
 use tracing::{info, warn};
 
 use crate::input::InputSimulator;
+use crate::platform::{self, PlatformHandler};
 use crate::protocol::{ClientMsg, ServerMsg};
 
 /// Frontend files embedded in the binary at compile time
@@ -41,6 +42,10 @@ fn embedded_frontend() -> HashMap<&'static str, EmbeddedFile> {
 /// Shared server state
 pub struct ServerState {
     pub input: Arc<Mutex<InputSimulator>>,
+    /// Platform-specific IME handler
+    pub platform: Box<dyn PlatformHandler>,
+    /// Custom IME toggle key (e.g. "shift", "ctrl+space"), None = platform default
+    pub ime_toggle_key: Option<String>,
     /// Active controller: (addr, sender_to_ws)
     pub active_ws: Arc<Mutex<Option<(SocketAddr, mpsc::UnboundedSender<Message>)>>>,
     /// Connected device name (from User-Agent)
@@ -63,10 +68,12 @@ fn generate_pin() -> String {
 }
 
 impl ServerState {
-    pub fn new(input: InputSimulator, frontend_dir: PathBuf) -> Self {
+    pub fn new(input: InputSimulator, frontend_dir: PathBuf, ime_toggle_key: Option<String>) -> Self {
         let (event_tx, _) = broadcast::channel(100);
         Self {
             input: Arc::new(Mutex::new(input)),
+            platform: platform::get_platform(),
+            ime_toggle_key,
             active_ws: Arc::new(Mutex::new(None)),
             connected_device: Arc::new(Mutex::new(None)),
             pending_ws: Arc::new(Mutex::new(None)),
@@ -89,6 +96,13 @@ impl ServerState {
         } else {
             false
         }
+    }
+
+    /// Read current IME status and push it to the active controller.
+    pub async fn push_ime_status(&self) {
+        let status = self.platform.get_ime_status();
+        let msg = serde_json::to_string(&ServerMsg::ImeInit { status }).unwrap();
+        self.send_to_active(&msg).await;
     }
 }
 
@@ -443,6 +457,8 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
         let _ = tx.send(Message::Text(msg.into()));
         state.send_event(format!("✅ {} ({}) 已连接", device_name, addr_str));
         info!("{} is now controller", addr_str);
+        // Push initial IME status to the new controller
+        state.push_ime_status().await;
     } else {
         // Active controller exists → need approval
         let has_pending = state.pending_ws.lock().await.is_some();
@@ -503,6 +519,8 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>, addr: SocketAddr,
                 let _ = tx.send(Message::Text(msg.into()));
                 state.send_event(format!("✅ {} ({}) 已接管控制", device_name, addr_str));
                 info!("{} approved, now controller", addr_str);
+                // Push initial IME status to the new controller
+                state.push_ime_status().await;
             }
             _ => {
                 let reason = match result {
@@ -601,37 +619,37 @@ async fn handle_client_msg(msg: ClientMsg, state: &Arc<ServerState>, addr: &str)
             return;
         }
         ClientMsg::ToggleIME { mode } => {
-            // On Linux: use fcitx-remote to activate/deactivate IME
-            #[cfg(target_os = "linux")]
-            {
-                let cmd = if mode == "zh" {
-                    "fcitx-remote -o"
-                } else {
-                    "fcitx-remote -c"
-                };
-                let cmd = cmd.to_string();
-                let result = tokio::task::spawn_blocking(move || {
-                    std::process::Command::new("sh").args(["-c", &cmd])
-                        .status().map_err(|e| anyhow::anyhow!("fcitx-remote: {}", e))
-                }).await;
-                match result {
-                    Ok(Ok(_)) => {}
-                    Ok(Err(e)) => warn!("IME toggle error: {}", e),
-                    Err(e) => warn!("IME toggle spawn error: {}", e),
-                }
+            // Legacy handler: directly set IME state via platform
+            let want_zh = mode == "zh";
+            info!("ToggleIME (legacy): mode={}", mode);
+            // Toggle to match desired state by reading current and toggling if needed
+            let current = state.platform.get_ime_status();
+            let need_toggle = (want_zh && current != "ZH") || (!want_zh && current != "EN");
+            if need_toggle {
+                state.platform.toggle_ime(state.ime_toggle_key.as_deref());
+                // Small delay to let the OS process the toggle
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             }
-            // On Windows: use ImmGetDefaultIMEWnd + SendMessage to toggle IME state
-            #[cfg(target_os = "windows")]
-            {
-                let want_active = mode == "zh";
-                let result = tokio::task::spawn_blocking(move || {
-                    crate::input::InputSimulator::toggle_ime_to(want_active);
-                }).await;
-                match result {
-                    Ok(()) => info!("IME toggled to {}", if want_active { "active" } else { "inactive" }),
-                    Err(e) => warn!("IME toggle error: {}", e),
-                }
-            }
+            // Push updated status
+            state.push_ime_status().await;
+            return;
+        }
+        ClientMsg::PressImeToggle => {
+            // Physical IME toggle: simulate platform key press
+            info!("PressImeToggle from {}", addr);
+            drop(input);
+            state.platform.toggle_ime(state.ime_toggle_key.as_deref());
+            // Small delay to let the OS process the toggle
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            // Push updated status
+            state.push_ime_status().await;
+            return;
+        }
+        ClientMsg::RefreshIme => {
+            // Client requests current IME status (passive calibration)
+            info!("RefreshIme from {}", addr);
+            drop(input);
+            state.push_ime_status().await;
             return;
         }
         ClientMsg::ApprovalResp { r } => {

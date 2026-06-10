@@ -66,6 +66,26 @@ body{background:#0f1117;color:#c9d1d9;font-family:-apple-system,system-ui,sans-s
   background:#238636;color:#fff;padding:4px 16px;border-radius:16px;
   font-size:12px;font-weight:600;opacity:0;transition:opacity .2s;pointer-events:none;z-index:100}
 .copied.show{opacity:1}
+
+/* ─── IME Settings Panel ──────────────────────────── */
+.ime-title{font-size:13px;font-weight:600;color:#c9d1d9;margin-bottom:4px}
+.ime-hint{font-size:11px;color:#484f58;margin-bottom:10px;line-height:1.4}
+.ime-presets{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.ime-preset{padding:6px 12px;border:1px solid #30363d;border-radius:6px;
+  background:#0d1117;color:#8b949e;font-size:12px;font-weight:500;
+  cursor:pointer;transition:all .15s;touch-action:manipulation}
+.ime-preset:hover{border-color:#58a6ff;color:#c9d1d9}
+.ime-preset.active{background:#238636;border-color:#2ea043;color:#fff}
+.ime-custom-row{display:flex;gap:8px;align-items:center}
+#ime-custom-input{flex:1;padding:6px 8px;border:1px solid #30363d;border-radius:6px;
+  background:#0d1117;color:#c9d1d9;font-size:12px;outline:none}
+#ime-custom-input:focus{border-color:#238636}
+#ime-save-btn{padding:6px 14px;border:none;border-radius:6px;
+  background:#238636;color:#fff;font-size:12px;font-weight:600;cursor:pointer;
+  transition:all .15s}
+#ime-save-btn:hover{background:#2ea043}
+#ime-save-btn:active{transform:scale(.97)}
+#ime-save-status{font-size:11px;min-height:16px;margin-top:4px;transition:opacity .2s}
 </style>
 </head>
 <body>
@@ -113,6 +133,22 @@ body{background:#0f1117;color:#c9d1d9;font-family:-apple-system,system-ui,sans-s
     <div class="status-dot off" id="status-dot"></div>
     <div class="status-text" id="status-text">等待连接...</div>
   </div>
+</div>
+
+<div class="panel" id="ime-panel">
+  <div class="ime-title">输入法切换快捷键</div>
+  <div class="ime-hint">当手机端"中/EN"键不起作用时，配置适合你电脑的快捷键</div>
+  <div class="ime-presets" id="ime-presets">
+    <button class="ime-preset" data-key="">默认</button>
+    <button class="ime-preset" data-key="shift">Shift</button>
+    <button class="ime-preset" data-key="ctrl+space">Ctrl+Space</button>
+    <button class="ime-preset" data-key="Caps_Lock">CapsLock</button>
+  </div>
+  <div class="ime-custom-row">
+    <input id="ime-custom-input" type="text" placeholder="自定义，如 ctrl+shift" autocomplete="off">
+    <button id="ime-save-btn">保存</button>
+  </div>
+  <div id="ime-save-status"></div>
 </div>
 
 <div class="copied" id="copied-toast">已复制</div>
@@ -232,6 +268,69 @@ infoEl.addEventListener('click', () => {
 if (invoke) {
   invoke('get_status').then(s => { if (s.running) onStarted(s); }).catch(() => {});
 }
+
+// ─── IME Config ─────────────────────────────────────
+const imePresets = document.getElementById('ime-presets');
+const imeCustomInput = document.getElementById('ime-custom-input');
+const imeSaveBtn = document.getElementById('ime-save-btn');
+const imeSaveStatus = document.getElementById('ime-save-status');
+let currentImeKey = null;
+
+async function loadImeConfig() {
+  if (!invoke) return;
+  try {
+    const cfg = await invoke('get_ime_config');
+    currentImeKey = cfg.ime_toggle_key || '';
+    updateImeUI();
+  } catch (e) {
+    console.warn('Failed to load IME config:', e);
+  }
+}
+
+function updateImeUI() {
+  // Update preset button states
+  document.querySelectorAll('.ime-preset').forEach(btn => {
+    const isActive = btn.dataset.key === currentImeKey;
+    btn.classList.toggle('active', isActive);
+  });
+  // Update custom input
+  const isPreset = ['', 'shift', 'ctrl+space', 'Caps_Lock'].includes(currentImeKey);
+  if (!isPreset && currentImeKey) {
+    imeCustomInput.value = currentImeKey;
+  } else {
+    imeCustomInput.value = '';
+  }
+}
+
+// Preset button clicks
+document.querySelectorAll('.ime-preset').forEach(btn => {
+  btn.addEventListener('click', () => {
+    currentImeKey = btn.dataset.key;
+    updateImeUI();
+  });
+});
+
+// Save button
+imeSaveBtn.addEventListener('click', async () => {
+  if (!invoke) return;
+  // If custom input has value, use it; otherwise use the selected preset
+  const customVal = imeCustomInput.value.trim();
+  const keyToSave = customVal || currentImeKey || null;
+  try {
+    await invoke('save_ime_config', { ime_toggle_key: keyToSave || null });
+    currentImeKey = keyToSave || '';
+    updateImeUI();
+    imeSaveStatus.textContent = '✓ 已保存（下次启动服务生效）';
+    imeSaveStatus.style.color = '#3fb950';
+    setTimeout(() => { imeSaveStatus.textContent = ''; }, 3000);
+  } catch (e) {
+    imeSaveStatus.textContent = '保存失败: ' + e;
+    imeSaveStatus.style.color = '#f85149';
+  }
+});
+
+// Load config on startup
+loadImeConfig();
 
 // 窗口控制按钮
 async function windowCmd(cmd) {

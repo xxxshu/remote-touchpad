@@ -4,10 +4,13 @@ use tauri::{Manager, State};
 use tokio::sync::{broadcast, Mutex};
 use serde::Serialize;
 
+mod config;
 mod input;
+mod platform;
 mod protocol;
 mod server;
 
+use config::AppConfig;
 use server::ServerState;
 
 /// Tauri-managed app state
@@ -16,6 +19,10 @@ pub struct AppState {
     stop_tx: Option<broadcast::Sender<()>>,
     port: u16,
     running: bool,
+    /// Path to the config directory (for persistence)
+    config_path: PathBuf,
+    /// Current app configuration
+    config: AppConfig,
 }
 
 #[derive(Serialize)]
@@ -112,7 +119,7 @@ async fn start_server_cmd(
         }
     };
 
-    let server_state = Arc::new(ServerState::new(input_sim, frontend_dir));
+    let server_state = Arc::new(ServerState::new(input_sim, frontend_dir, app.config.ime_toggle_key.clone()));
     let (stop_tx, stop_rx) = broadcast::channel(1);
 
     let state_clone = server_state.clone();
@@ -178,6 +185,36 @@ async fn stop_server_cmd(state: State<'_, Mutex<AppState>>) -> Result<(), String
     Ok(())
 }
 
+// ─── IME Config Commands ──────────────────────────────────
+
+#[derive(Serialize)]
+struct ImeConfigResponse {
+    ime_toggle_key: Option<String>,
+}
+
+#[tauri::command]
+async fn get_ime_config(state: State<'_, Mutex<AppState>>) -> Result<ImeConfigResponse, String> {
+    let app = state.lock().await;
+    Ok(ImeConfigResponse {
+        ime_toggle_key: app.config.ime_toggle_key.clone(),
+    })
+}
+
+#[tauri::command]
+async fn save_ime_config(
+    ime_toggle_key: Option<String>,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let mut app = state.lock().await;
+    app.config.ime_toggle_key = ime_toggle_key.clone();
+    config::save_config(&app.config_path, &app.config)?;
+    // If server is running, the new config takes effect on next server start
+    if app.server_state.is_some() {
+        tracing::info!("IME toggle key saved: {:?} (takes effect on next server start)", ime_toggle_key);
+    }
+    Ok(())
+}
+
 // ─── Tauri App Setup ──────────────────────────────────────
 
 pub fn run() {
@@ -185,16 +222,26 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .manage(Mutex::new(AppState {
-            server_state: None,
-            stop_tx: None,
-            port: 8765,
-            running: false,
-        }))
+        .setup(|app| {
+            let config_path = app.path().app_config_dir()
+                .unwrap_or_else(|_| PathBuf::from("."));
+            let loaded_config = config::load_config(&config_path);
+            app.manage(Mutex::new(AppState {
+                server_state: None,
+                stop_tx: None,
+                port: 8765,
+                running: false,
+                config_path,
+                config: loaded_config,
+            }));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_status,
             start_server_cmd,
             stop_server_cmd,
+            get_ime_config,
+            save_ime_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -203,12 +250,24 @@ pub fn run() {
 /// CLI mode: start server without Tauri GUI
 pub fn run_cli() {
     tracing_subscriber::fmt::init();
-    let port: u16 = std::env::args()
-        .collect::<Vec<_>>()
-        .windows(2)
+    let args: Vec<String> = std::env::args().collect();
+    let port: u16 = args.windows(2)
         .find(|w| w[0] == "--port")
         .and_then(|w| w[1].parse().ok())
         .unwrap_or(8765);
+    let ime_key_arg: Option<String> = args.windows(2)
+        .find(|w| w[0] == "--ime-key")
+        .map(|w| w[1].clone());
+
+    // Load config from exe directory, override with --ime-key if provided
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_default();
+    let mut app_config = config::load_config(&exe_dir);
+    if let Some(key) = ime_key_arg {
+        app_config.ime_toggle_key = Some(key);
+    }
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     rt.block_on(async {
@@ -223,12 +282,9 @@ pub fn run_cli() {
             }
         };
 
-        let frontend_dir = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-            .unwrap_or_default();
-
-        let server_state = Arc::new(server::ServerState::new(input_sim, frontend_dir));
+        let frontend_dir = exe_dir.clone();
+        let ime_toggle_key = app_config.ime_toggle_key.clone();
+        let server_state = Arc::new(server::ServerState::new(input_sim, frontend_dir, ime_toggle_key));
         let pin = server_state.pin.lock().await.clone();
         let local_ip = server::get_local_ip();
         let url = format!("http://{}:{}", local_ip, port);
@@ -237,6 +293,9 @@ pub fn run_cli() {
         eprintln!("[info] Port: {}", port);
         eprintln!("[info] PIN: {}", pin);
         eprintln!("[info] URL: {}", url);
+        if let Some(ref key) = app_config.ime_toggle_key {
+            eprintln!("[info] IME toggle key: {}", key);
+        }
 
         let (stop_tx, stop_rx) = tokio::sync::broadcast::channel(1);
         let state_clone = server_state.clone();

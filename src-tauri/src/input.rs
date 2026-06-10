@@ -8,25 +8,6 @@ use std::sync::Mutex;
 use anyhow::Result;
 use tracing::info;
 
-// ─── Windows IME FFI (Imm32 API) ──────────────────────
-type HIMC = isize;
-type HWND = isize;
-
-#[cfg(target_os = "windows")]
-#[link(name = "user32")]
-extern "system" {
-    fn GetForegroundWindow() -> HWND;
-}
-
-#[cfg(target_os = "windows")]
-#[link(name = "imm32")]
-extern "system" {
-    fn ImmGetContext(hWnd: HWND) -> HIMC;
-    fn ImmReleaseContext(hWnd: HWND, hIMC: HIMC) -> i32;
-    fn ImmGetOpenStatus(hIMC: HIMC) -> i32;
-    fn ImmSetOpenStatus(hIMC: HIMC, fOpen: i32) -> i32;
-}
-
 /// Cross-platform input simulator using enigo (works on Windows, macOS, Linux).
 pub struct InputSimulator {
     enigo: Mutex<Option<Enigo>>,
@@ -296,24 +277,6 @@ impl InputSimulator {
 
     pub async fn close(&mut self) {
         // enigo doesn't need explicit cleanup
-    }
-
-    // ─── Windows IME control (Imm32 API) ──────────────────
-    /// Toggle IME state using ImmGetContext + ImmSetOpenStatus.
-    /// This directly sets the IME open status on the foreground window.
-    #[cfg(target_os = "windows")]
-    pub fn toggle_ime_to(active: bool) {
-        unsafe {
-            let hwnd = GetForegroundWindow();
-            if hwnd == 0 { return; }
-            let himc = ImmGetContext(hwnd);
-            if himc == 0 { return; }
-            let want = if active { 1 } else { 0 };
-            if ImmGetOpenStatus(himc) != want {
-                ImmSetOpenStatus(himc, want);
-            }
-            ImmReleaseContext(hwnd, himc);
-        }
     }
 }
 
